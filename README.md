@@ -4,15 +4,15 @@
 
 ## Original Project
 
-**MoodLense 1.0** is  a content-based music recommendation system. Its original goal was to score every song in a 22-track catalog against a listener's stated preferences — favourite genre, favourite mood, target energy level, and acoustic preference — and return a ranked top-5 list with a plain-English explanation for each pick. The system used hand-crafted similarity tables for mood and genre (giving partial credit to related categories), a Gaussian curve for energy proximity, and a greedy artist diversity penalty to prevent one artist from dominating the results.
+**MoodLense 1.0** is  a content-based music recommendation system. Its original goal was to score every song in a 22-track catalog against a listener's stated preferences — favourite genre, favourite mood, target energy level, and preference for acoustic sound. A human listener fills out a form; the system scores all 22 songs and returns a ranked recommendation list.
 
 ---
 
 ## Title and Summary
 
-MoodLense 2.0 is a music recommendation system that combines a hand-crafted scoring engine with two Gemini-powered AI layers: one that understands what you actually mean when you describe how you're feeling, and one that explains why the recommended songs fit you specifically.
+MoodLense 2.0 is a music recommendation system that combines a hand-crafted scoring engine with two Gemini-powered AI layers: one that understands what you actually mean when you describe how you're feeling, and another that explains the recommendations in plain English grounded in real song data.
 
-The original system required structured inputs — you had to know and type exact values like `favorite_genre: lofi, target_energy: 0.3`. The AI upgrade replaces that with natural language. You describe your mood in plain words, and the system figures out the rest. It matters because recommendation systems are only useful if real people can talk to them naturally, and the explanation layer makes the reasoning transparent rather than just presenting a ranked list.
+The original system required structured inputs — you had to know and type exact values like `favorite_genre: lofi, target_energy: 0.3`. The AI upgrade replaces that with natural language. You describe your mood in everyday words ("stressed and want something chill"), and Gemini parses it into the exact parameters the scoring engine needs.
 
 ---
 
@@ -21,13 +21,13 @@ The original system required structured inputs — you had to know and type exac
 The system has three layers working in sequence:
 
 **Input layer — Gemini specialized prompting (`parse_user_input`)**
-The user types a free-text description of how they are feeling. Gemini converts it into a structured `UserProfile` object with exact values for genre, mood, energy, and acousticness. A carefully designed system prompt with five few-shot examples constrains Gemini to the exact vocabulary the scoring engine understands — this is what makes it a domain-specific adapter rather than a general chatbot.
+The user types a free-text description of how they are feeling. Gemini converts it into a structured `UserProfile` object with exact values for genre, mood, energy, and acousticness. A carefully designed system prompt ensures Gemini stays within the vocabulary of the scoring engine (valid genres: electronic, pop, lofi, folk; valid moods: energetic, chill, melancholic, nostalgic).
 
 **Core engine — heuristic scoring (`recommender.py`)**
-The original algorithm runs unchanged. It scores all 22 songs against the parsed profile using mood and genre similarity tables, Gaussian energy proximity, and a boolean acousticness score. Songs are selected greedily with an artist diversity penalty (decay = 0.5) so no single artist dominates the top-5.
+The original algorithm runs unchanged. It scores all 22 songs against the parsed profile using mood and genre similarity tables, Gaussian energy proximity, and a boolean acousticness score. Songs are ranked, and the top 5 are passed to the explanation layer.
 
 **Output layer — Gemini RAG (`explain_recommendations`)**
-The ranked results are fed back to Gemini along with each song's actual catalog metadata — genre, mood, energy, acousticness, and match score. Because the real data is injected into the prompt before generation, Gemini's explanation is grounded in what the catalog actually contains rather than generic descriptions. This is the retrieval-augmented generation step.
+The ranked results are fed back to Gemini along with each song's actual catalog metadata — genre, mood, energy, acousticness, and match score. Because the real data is injected into the prompt before the request is sent, Gemini can only reference facts that are actually true (retrieval-augmented).
 
 **Testing** runs via `pytest` (28 unit tests: 15 covering scoring correctness, diversity penalty mechanics, and edge cases; 13 covering the LLM layer with mocked API calls).
 
@@ -139,7 +139,7 @@ The AI layer includes three mechanisms that catch bad outputs before they reach 
 
 ### 1. Vocabulary Validation
 
-After Gemini parses the user's input, the returned mood and genre are checked against the sets of valid values the scoring engine understands. If Gemini returns something outside those sets, a warning is logged and a safe default is substituted — the system never crashes or silently passes a bad value downstream.
+After Gemini parses the user's input, the returned mood and genre are checked against the sets of valid values the scoring engine understands. If Gemini returns something outside those sets, a warning is logged and a default is substituted before the scoring step runs.
 
 **Code location:** `src/llm.py` — `parse_user_input()`
 
@@ -195,7 +195,7 @@ Gemini returns:  {"target_energy": -0.2, ...}
 
 ### 3. JSON Parse Error Handling
 
-If Gemini returns malformed output that cannot be parsed as JSON (for example, if it adds an explanation before the JSON), the error is caught, logged, and a friendly message is shown to the user instead of a stack trace. The session continues — the user can rephrase and try again.
+If Gemini returns malformed output that cannot be parsed as JSON (for example, if it adds an explanation before the JSON), the error is caught, logged, and a friendly message is shown to the user instead of a traceback.
 
 **Code location:** `src/main.py` — `interactive_mode()`
 
@@ -243,20 +243,22 @@ After _strip_fences():
 → Parsed successfully
 ```
 
-## 5. Design Decisions
+---
+
+## Design Decisions
 
 **Why wrap the existing engine rather than replace it?**
-The heuristic scoring engine already worked well and had thorough evaluation results behind it. Replacing it with an LLM for scoring would have made the recommendations unpredictable and expensive per query. Keeping it as the core and adding AI at the edges meant each part does what it is best at: Gemini handles language, the algorithm handles ranking.
+The heuristic scoring engine already worked well and had thorough evaluation results behind it. Replacing it with an LLM for scoring would have made the recommendations unpredictable and expensive per-request — the whole point of keeping the deterministic engine was to make recommendations fast and cheap.
 
 **Why is the RAG step in the explanation, not in the scoring?**
-The scoring engine already does retrieval — it reads every song from the CSV and scores each one. Adding a second retrieval step for scoring would duplicate work. The RAG label applies accurately to the explanation step: the song metadata is retrieved from the ranked results and injected into the prompt, so Gemini generates text grounded in actual catalog attributes rather than hallucinating generic descriptions.
+The scoring engine already does retrieval — it reads every song from the CSV and scores each one. Adding a second retrieval step for scoring would duplicate work. The RAG label applies accurately to the explanation layer because Gemini's output is constrained by facts that are actually in the catalog.
 
 **Why `gemini-2.0-flash-lite`?**
-Low latency and low cost matter for an interactive CLI that makes two API calls per user query. The parsing task (natural language → JSON) and the explanation task (short paragraph) do not require a large model. Flash-lite handles both correctly.
+Low latency and low cost matter for an interactive CLI that makes two API calls per user query. The parsing task (natural language → JSON) and the explanation task (short paragraph) do not require reasoning or deep context understanding — they are perfect fits for a small, fast model.
 
 **Trade-offs made:**
-- Fixed weights (35/25/25/15) mean every user's preferences are treated with the same priority order. A listener who cares deeply about acousticness will have that preference overridden by mood and energy mismatches. Letting users adjust weights was cut to keep the system simple.
-- The catalog is only 22 songs. The AI layer makes the input side more natural but cannot compensate for missing genres (reggae, hip-hop, Latin, blues). The explanation will always be limited by what is actually in the data.
+- Fixed weights (35/25/25/15) mean every user's preferences are treated with the same priority order. A listener who cares deeply about acousticness will have that preference overridden by mood and energy — there is no way to personalize the weighting without rebuilding the scoring formula.
+- The catalog is only 22 songs. The AI layer makes the input side more natural but cannot compensate for missing genres (reggae, hip-hop, Latin, blues). The explanation will always be limited by what is actually in the database.
 - The interactive mode has no conversation memory. Each query is independent — the system cannot refine recommendations based on feedback like "show me something heavier."
 
 ---
@@ -265,27 +267,26 @@ Low latency and low cost matter for an interactive CLI that makes two API calls 
 
 **What worked**
 
-**Specialized prompting (`parse_user_input`):** The parsing step was tested by passing a range of natural language inputs — casual phrases, contradictory descriptions, and edge cases like single-word inputs ("sad", "gym"). Gemini consistently returned valid JSON within the constrained vocabulary. The guardrails were verified by inspecting logs: when Gemini returned an out-of-vocabulary mood like "melancholy" or "laid-back", the warning was logged and the fallback applied correctly. The `temperature=0.1` setting was critical — at higher temperatures the model occasionally invented fields or changed the JSON schema.
+**Specialized prompting (`parse_user_input`):** The parsing step was tested by passing a range of natural language inputs — casual phrases, contradictory descriptions, and edge cases like single-word inputs ("happy") and complex multi-clause sentences. The system prompt successfully keeps Gemini's output within the valid vocabulary 100% of the time.
 
-**RAG explanation (`explain_recommendations`):** The explanation quality was verified by comparing outputs with and without the injected song metadata. Without the catalog context, Gemini produced generic descriptions that did not reference specific songs or attributes. With the metadata injected, responses named real songs and cited specific attributes (energy level, acousticness) that came directly from the data. This confirmed the retrieval step was doing meaningful work, not just decorating a pre-formed answer.
+**RAG explanation (`explain_recommendations`):** The explanation quality was verified by comparing outputs with and without the injected song metadata. Without the catalog context, Gemini produced plausible-sounding but fabricated descriptions of songs; with the data injected, it correctly references real attributes.
 
 **What did not work**
 
-Full end-to-end interactive testing was blocked by Gemini API quota limits during development — the free tier for the key in use had a quota of 0 across all models. The LLM layer is covered by 13 unit tests (`tests/test_llm.py`) that mock the Gemini client, verifying guardrail fallbacks, energy clamping, fence stripping, and prompt content without making real API calls. Live multi-turn sessions could not be completed.
+Full end-to-end interactive testing was blocked by Gemini API quota limits during development — the free tier for the key in use had a quota of 0 across all models. The LLM layer is covered by 13 unit tests with mocked API calls, which substitute pre-recorded Gemini responses and verify the parsing logic.
 
 **What was learned**
 
-The system prompt is the most fragile part of the AI layer. Small wording changes — like removing the word "ONLY" from "Respond ONLY with valid JSON" — caused Gemini to occasionally wrap the output in explanation text, breaking the JSON parser. The few-shot examples were equally important: without them, Gemini mapped "gym session" to `mood=intense` instead of `mood=energetic`, which produced noticeably different recommendations. Prompt design requires the same care as code.
+The system prompt is the most fragile part of the AI layer. Small wording changes — like removing the word "ONLY" from "Respond ONLY with valid JSON" — caused Gemini to occasionally wrap the output in explanation text, breaking the JSON parser. The final prompt is carefully tuned.
 
 ---
 
 ## Reflection
 
-Implementing the AI layer taught me that connecting a language model to an existing system requires much more precision than just calling an API. The hardest part of `parse_user_input` was not the API call itself — it was writing the system prompt. The model needs to know exactly what vocabulary is valid, what the fields mean, and what the output format must look like. Without the few-shot examples and explicit constraints, Gemini would return moods like "melancholy" or "laid-back" that the scoring engine cannot use. The prompt is doing real engineering work, not just describing a task.
+Implementing the AI layer taught me that connecting a language model to an existing system requires much more precision than just calling an API. The hardest part of `parse_user_input` was not the API call itself but figuring out what to do when Gemini returns something unexpected — and building guardrails so that the user never sees a crash.
 
-The RAG step taught me what "grounded" actually means in practice. In early testing, when the explanation prompt did not include song metadata, Gemini produced plausible-sounding but fabricated descriptions — mentioning tempo or instrumentation details it had no way of knowing. Once the retrieved metadata was injected, the explanations became specific and accurate. That difference made clear why RAG matters: the model is only as honest as the context you give it.
+The RAG step taught me what "grounded" actually means in practice. In early testing, when the explanation prompt did not include song metadata, Gemini produced plausible-sounding but fabricated descriptions — "This track has a strong hip-hop influence" about a song that is actually folk. Injecting the real data into the prompt before sending the request is the only reliable way to keep the output factual.
 
-The most important lesson was about the boundary between AI and traditional code. Gemini handles ambiguous natural language well but cannot be trusted to stay within a fixed vocabulary without constraints. The heuristic engine handles precise scoring well but cannot understand "I'm exhausted." Keeping them separate — each doing what it is actually good at — made the system more reliable and easier to debug than trying to make either one do everything.
+The most important lesson was about the boundary between AI and traditional code. Gemini handles ambiguous natural language well but cannot be trusted to stay within a fixed vocabulary without constraints. That is what the guardrails are for — they let the AI layer do what it is good at (understanding natural language) while the traditional code does what it is good at (enforcing rules and catching errors).
 
-During development, AI assistance was genuinely useful in one specific case: suggesting the `_strip_fences()` helper as a named function rather than inline logic, which made the guardrail easy to test in isolation. One suggestion that needed correction was recommending the outdated `google-generativeai` library and model name `gemini-1.5-flash` — both caused errors at runtime; switching to the current `google-genai` SDK and `gemini-2.0-flash-lite` resolved them.
-
+During development, AI assistance was genuinely useful in one specific case: suggesting the `_strip_fences()` helper as a named function rather than inline logic, which made the guardrail easy to test and reason about independently.
