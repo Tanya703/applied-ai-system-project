@@ -9,7 +9,10 @@ You will implement the functions in recommender.py:
 - recommend_songs
 """
 
+import json
+import logging
 import os
+import sys
 from recommender import load_songs, recommend_songs
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "songs.csv")
@@ -155,13 +158,64 @@ def print_recommendations(label: str, recommendations) -> None:
             for reason in explanation.split("\n"):
                 print(f"     {reason.strip()}")
 
+def interactive_mode(songs: list) -> None:
+    try:
+        from llm import parse_user_input, explain_recommendations
+    except ImportError as e:
+        print(f"LLM module unavailable: {e}")
+        return
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    print("\nMoodLense 1.0 — Natural Language Mode")
+    print("Describe what you're in the mood for. Type 'quit' to exit.\n")
+
+    while True:
+        try:
+            user_input = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+        if not user_input or user_input.lower() in ("quit", "exit", "q"):
+            break
+
+        try:
+            profile = parse_user_input(user_input)
+            acoustic_label = "acoustic" if profile.likes_acoustic else "electronic"
+            print(
+                f"\n  [Parsed] genre={profile.favorite_genre}  "
+                f"mood={profile.favorite_mood}  "
+                f"energy={profile.target_energy:.2f}  "
+                f"sound={acoustic_label}"
+            )
+            prefs = {
+                "favorite_genre": profile.favorite_genre,
+                "favorite_mood":  profile.favorite_mood,
+                "target_energy":  profile.target_energy,
+                "likes_acoustic": profile.likes_acoustic,
+            }
+            recs = recommend_songs(prefs, songs, k=5)
+            print_recommendations(f'"{user_input}"', recs)
+
+            explanation = explain_recommendations(user_input, recs)
+            print(f"\n  Why these songs:\n  {explanation}\n")
+
+        except json.JSONDecodeError as e:
+            logging.error("Could not parse LLM output: %s", e)
+            print("  Could not understand that — try rephrasing.\n")
+        except Exception as e:
+            logging.error("Error: %s", e)
+            print(f"  Error: {e}\n")
+
+
 def main() -> None:
     songs = load_songs(DATA_PATH)
     print(f"Loaded songs: {len(songs)}")
 
-    for label, user_prefs in USERS.items():
-        recommendations = recommend_songs(user_prefs, songs, k=5)
-        print_recommendations(label, recommendations)
+    if "--interactive" in sys.argv or "-i" in sys.argv:
+        interactive_mode(songs)
+    else:
+        for label, user_prefs in USERS.items():
+            recommendations = recommend_songs(user_prefs, songs, k=5)
+            print_recommendations(label, recommendations)
 
 
 if __name__ == "__main__":

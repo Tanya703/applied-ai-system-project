@@ -77,8 +77,6 @@ We ran the program and manually counted how many times each song appeared across
 
 **Quantitative Results**
 
-`python -m src.evaluate`
-
 | Metric                      | MoodLense 1.0 | Binary Baseline | No-Diversity | Random  |
 |-----------------------------|:-------------:|:---------------:|:------------:|:-------:|
 | Avg rank-1 score            | 0.86          | 0.85            | 0.86         | n/a*    |
