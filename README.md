@@ -243,9 +243,7 @@ After _strip_fences():
 → Parsed successfully
 ```
 
----
-
-### Design Decisions
+## 5. Design Decisions
 
 **Why wrap the existing engine rather than replace it?**
 The heuristic scoring engine already worked well and had thorough evaluation results behind it. Replacing it with an LLM for scoring would have made the recommendations unpredictable and expensive per query. Keeping it as the core and adding AI at the edges meant each part does what it is best at: Gemini handles language, the algorithm handles ranking.
